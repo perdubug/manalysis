@@ -4,6 +4,8 @@
  *
  * History:
  *     20/05/2012   Yang Ming  Init version.
+ *     28/05/2012   Yang Ming  Add heap_init in meta file
+ *                             Start recording csv file from heap_init                    
  *
  * How to build it?
  *     - Linux(Default)
@@ -59,7 +61,7 @@ typedef signed int         sint32;
     -----------------------------------------------------------------------------------
 
     Timestamp:        HH:MM:SS.000000000
-    Operation Type:   + means deallocation, - means allocation
+    Operation Type:   + means deallocation, - means allocation, $ - means start(heap_init)
     Size:             Only available for allocation
     Allocation Type:  See ALLOCATION_TYPE
     Caller and caller2 
@@ -86,6 +88,7 @@ typedef signed int         sint32;
 #define INVALID_HOUR 0xFF
 #define IS_A_NUMBER(x) ((x)>='0' && (x)<='9')
 
+#define TYPE_INIT       '$'
 #define TYPE_ALLOCATE   '-'
 #define TYPE_DEALLOCATE '+'
 
@@ -119,6 +122,7 @@ typedef signed int         sint32;
 #define SIGNATURE_ALIGNED_ALLOC_NO_WAIT   0x8A  /* HOOK_ALIGNED_BLOCK_ALLOC_NO_WAIT */
 #define SIGNATURE_ALIGNED_ALLOC           0x8B  /* HOOK_ALIGNED_BLOCK_ALLOC         */
 
+#define SIGNATURE_HEAP_INIT               0x79  /* HOOK_HEAP__INIT                  */
 
 /************************************************************************** 
    structs...
@@ -243,12 +247,13 @@ typedef struct META_FORMAT_TIME {
     char second[2];
     char skip3;
     char ms[9];
+    char skip4;
 } META_FORMAT_TIME;
 
 /* for .meta file */
 typedef struct META_FORMAT_UNIT {
     META_FORMAT_TIME mft;
-	char skip[2];    
+	char skip;    
     char type;      /* + means deallocation, - mean allocation */
     char skip2;
     char address[8];
@@ -812,20 +817,25 @@ uint8 scan_single_meta_file(FILE * fd_rd,FILE * fd_wr)
 
     META_FORMAT_UNIT * meta_unit;
     uint32 hour,minute,second;
-    uint32 size,allocation_type;
+    uint32 size;
 
     char line_rd[MAX_SINGLE_METADATA_LEN] = {0};
     char line_wr[MAX_SINGLE_METADATA_LEN] = {0};
     char temp[3]; 
-    static uint32 last_hours = INVALID_HOUR;
+
+    static uint32 last_hours       = INVALID_HOUR;
+    static uint8  find_begin_point = FALSE;
+
 
     uint32 addr;
 
     while (fgets(line_rd,MAX_SINGLE_METADATA_LEN, fd_rd) != 0) {
 
         meta_unit = (META_FORMAT_UNIT *)line_rd;
-        //meta_unit->skip6     = '\0';
-        //meta_unit->mft.skip4 = '\0';
+
+        //meta_unit->skip6   = '\0';
+        meta_unit->mft.skip4 = '\0';
+        
         temp[0] = meta_unit->mft.hour[0];temp[1] = meta_unit->mft.hour[1];temp[2]='\0';
         hour   = strtouint32(temp);
 		
@@ -847,9 +857,7 @@ uint8 scan_single_meta_file(FILE * fd_rd,FILE * fd_wr)
             last_hours = hour;
         }
 
-        size   = strtouint32(meta_unit->size);
-        allocation_type = meta_unit->allocation_type;
-
+        size  = strtouint32(meta_unit->size);
         addr  = (uint32)char_2_hex(meta_unit->address[0]) << 28   |
                 (uint32)char_2_hex(meta_unit->address[1]) << 24   |
                 (uint32)char_2_hex(meta_unit->address[2]) << 20   |
@@ -861,27 +869,32 @@ uint8 scan_single_meta_file(FILE * fd_rd,FILE * fd_wr)
 
         switch (meta_unit->type)
         {
+            case TYPE_INIT:
+                  find_begin_point = TRUE;
+                  continue;
+ 
             case TYPE_ALLOCATE:
                   halloc_info_linkedlst_add(addr,size);
                   g_free_heap -= size;
-                  sprintf(line_wr,"%02d/%02d/%04d %02d:%02d:%02d.%s, %08d\n",
+                  sprintf(line_wr,"%02d/%02d/%04d %02d:%02d:%02d.%9s, %08d\n",
                           g_trace_date.day,g_trace_date.month,g_trace_date.year,
                           hour,minute,second,meta_unit->mft.ms,g_free_heap);
                   break;
 
             case TYPE_DEALLOCATE:
                   g_free_heap += halloc_info_linkedlst_get_size(addr);
-                  sprintf(line_wr,
-                          "%02d/%02d/%04d %02d:%02d:%02d.%s, %08d\n",
+                  sprintf(line_wr,"%02d/%02d/%04d %02d:%02d:%02d.%9s, %08d\n",
                           g_trace_date.day,g_trace_date.month,g_trace_date.year,
                           hour,minute,second,meta_unit->mft.ms,g_free_heap);
                   break;
 
             default:
                   assert(1);
-        }        
+        }
 
-        fwrite(line_wr,strlen(line_wr),1,fd_wr);
+        if (find_begin_point) {
+            fwrite(line_wr,strlen(line_wr),1,fd_wr);
+        }
     }
 
     bret = TRUE;
@@ -1045,6 +1058,7 @@ uint8 metadata_single_blx_file(uint32 fileindex,char * filepath)
 
         switch (hti.id)
         {
+            case SIGNATURE_HEAP_INIT:
             case SIGNATURE_HEAP_DEALLOC:
             case SIGNATURE_HEAP_ALLOC:
             case SIGNATURE_HEAP_ALLOC_NO_WAIT:
@@ -1062,6 +1076,11 @@ uint8 metadata_single_blx_file(uint32 fileindex,char * filepath)
         
         switch (hti.id)
         {
+            case SIGNATURE_HEAP_INIT:
+                sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_INIT,0,0,0,0,0);
+                fwrite(metadata,strlen(metadata),1,fd_meta);                
+                break;
+
             case SIGNATURE_HEAP_DEALLOC:            
                 // printf("%s HOOK_HEAP_ALLOC_DEALLOC,ptr=0x%X\n",trace_time,GET_PTR(hti.ptr));
                 // fprintf(stdout,"%s,HEAP_DEALLOC,free size=%d(-%d)\n",trace_time,g_free_heap,freed_size);
