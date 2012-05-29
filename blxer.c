@@ -42,7 +42,7 @@ typedef signed int         sint32;
    Macros...
  **************************************************************************/
 /* TODO:use the real one */
-#define TOTAL_FREE_HEAP_BYTES (6.6*1024*1024)
+#define DEFAULT_TOTAL_FREE_HEAP (6*1024*1024)   /* default is 6M free heap */
 
 #define TEMPLATE_FILE_LIST         "./meta_tmp/tmp_blx_file_list"
 #define META_FILE_LIST             "./meta_tmp/meta_file_list"
@@ -301,7 +301,6 @@ typedef struct  TRACE_TIME{
  **************************************************************************/
 TRACE_DATE           g_trace_date;
 BLX_FILE_LIST_NODE * g_bfln_header;
-uint32               g_free_heap = TOTAL_FREE_HEAP_BYTES;
 HEAP_LINK_NODE     * g_heap_link;
 
 THREAD_UNIT          g_thread_pool[MAX_NUM_THREADS];
@@ -811,7 +810,7 @@ void halloc_info_linkedlst_add(uint32 addr,uint32 size)
     return;
 }
 
-uint8 scan_single_meta_file(FILE * fd_rd,FILE * fd_wr)
+uint8 scan_single_meta_file(FILE * fd_rd, FILE * fd_wr, uint32 init_free_heap)
 {
     uint8 bret = FALSE;
 
@@ -825,9 +824,13 @@ uint8 scan_single_meta_file(FILE * fd_rd,FILE * fd_wr)
 
     static uint32 last_hours       = INVALID_HOUR;
     static uint8  find_begin_point = FALSE;
-
+    static uint32 free_heap        = 0;
 
     uint32 addr;
+
+    if (free_heap == 0) {
+        free_heap = init_free_heap;
+    }
 
     while (fgets(line_rd,MAX_SINGLE_METADATA_LEN, fd_rd) != 0) {
 
@@ -875,17 +878,17 @@ uint8 scan_single_meta_file(FILE * fd_rd,FILE * fd_wr)
  
             case TYPE_ALLOCATE:
                   halloc_info_linkedlst_add(addr,size);
-                  g_free_heap -= size;
+                  free_heap -= size;
                   sprintf(line_wr,"%02d/%02d/%04d %02d:%02d:%02d.%9s, %08d\n",
                           g_trace_date.day,g_trace_date.month,g_trace_date.year,
-                          hour,minute,second,meta_unit->mft.ms,g_free_heap);
+                          hour,minute,second,meta_unit->mft.ms,free_heap);
                   break;
 
             case TYPE_DEALLOCATE:
-                  g_free_heap += halloc_info_linkedlst_get_size(addr);
+                  free_heap += halloc_info_linkedlst_get_size(addr);
                   sprintf(line_wr,"%02d/%02d/%04d %02d:%02d:%02d.%9s, %08d\n",
                           g_trace_date.day,g_trace_date.month,g_trace_date.year,
-                          hour,minute,second,meta_unit->mft.ms,g_free_heap);
+                          hour,minute,second,meta_unit->mft.ms,free_heap);
                   break;
 
             default:
@@ -901,7 +904,7 @@ uint8 scan_single_meta_file(FILE * fd_rd,FILE * fd_wr)
     return bret;
 }
 
-uint8 build_csv()
+uint8 build_csv(uint32 init_free_heap)
 {
     uint8 bret = FALSE;
  
@@ -962,7 +965,7 @@ uint8 build_csv()
            break;
         }
 
-        if (scan_single_meta_file(fd_meta,fd_csv) == FALSE)  {
+        if (scan_single_meta_file(fd_meta,fd_csv,init_free_heap) == FALSE)  {
            fprintf(stderr,"Scan %s failed\n",single_file_path);
            fclose(fd_meta);
            bret = FALSE;
@@ -1399,18 +1402,6 @@ uint8 sampling_csv_from_meta(uint64 sample_rate)
     return bret;
 }
 
-void show_usage(void)
-{
-    fprintf(stdout,"Usage: ma <option>\r\n");
-    fprintf(stdout,"Options:\r\n");
-    fprintf(stdout,"  Currently, the following options are supported...\r\n");
-    fprintf(stdout,"   -b                    build meta data by scanning all blx files recursively and generate metadata at %s\r\n",DEFAULT_META_FOLDER_PREFIX);
-    fprintf(stdout,"   -r                    output general heap usage\r\n");
-    fprintf(stdout,"   -s <sampling rate>    generat a new csv with specified sampling rate\r\n");
-    fprintf(stdout,"   -g <minutes>          generat a new csv by sampling every <minutes>\r\n");
-    fprintf(stdout,"\r\n");
-}
-
 /* -t <minutes> option
       sampling for every <minutes>
  */
@@ -1607,8 +1598,22 @@ sint32 get_expression_result(char * argv)
         ret = -1;
     }
 
-    printf("ret=%d\n",ret);
+    //printf("ret=%d\n",ret);
     return ret;
+}
+
+void show_usage(void)
+{
+    fprintf(stdout,"Usage: ma <option>\r\n");
+    fprintf(stdout,"Options:\r\n");
+    fprintf(stdout,"  Currently, the following options are supported...\r\n");
+    fprintf(stdout,"   -b                   build meta data by scanning all blx files recursively and generate metadata at %s\r\n",DEFAULT_META_FOLDER_PREFIX);
+    fprintf(stdout,"   -r                   output general heap usage\r\n");
+    fprintf(stdout,"   -s <sampling rate>   generate a csv with specified sampling rate\r\n");
+    fprintf(stdout,"   -t <minutes>         generate a csv by sampling every <minutes>\r\n");
+    fprintf(stdout,"   -g                   generate a completely csv file based on meta files\r\n");
+    fprintf(stdout,"   -g <free heap size>  generate a completely csv file based on meta files by specified init free heap size\r\n");
+    fprintf(stdout,"\r\n");
 }
 
 int main(int argc, char * argv[])
@@ -1620,7 +1625,7 @@ int main(int argc, char * argv[])
 ////////////////////////////////////////////////////////////////////////////////////
     switch (argc)
     {
-       case 2:  /* --help, -r, -b */
+       case 2:  /* --help, -r, -b, -g */
            if (argv[1][0] != '-' ) {
                 goto MISSING_OR_WRONG_OPTIONS;
            } 
@@ -1640,7 +1645,7 @@ int main(int argc, char * argv[])
                    break;
 
                case 'g':                      /* -g, build big csv based on meta files                     */
-                   bret = build_csv();
+                   bret = build_csv(DEFAULT_TOTAL_FREE_HEAP);
                    break;           
 
                case 'r':                      /* -r, generate general heap report  */
@@ -1654,7 +1659,7 @@ int main(int argc, char * argv[])
            }
            break;
 
-       case 3:  /* -s, -g */
+       case 3:  /* -s, -t */
            if (argv[1][0] != '-' ) {
                 goto MISSING_OR_WRONG_OPTIONS;
            } 
@@ -1668,7 +1673,16 @@ int main(int argc, char * argv[])
                case 't':               /* -t <minutes>, generate csv by every minutes */
                    bret = opt_handler_t(argv[2]);
                    break;
-    
+
+               case 'g':               /* -g <init_heap_size> */
+                   if (get_expression_result(argv[2]) > 0)  {
+                       bret = build_csv(get_expression_result(argv[2]));
+                   } else {
+                       show_usage();
+                       return 1;
+                   }
+                   break;
+
                default:
                    break;
            }           
