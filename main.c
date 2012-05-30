@@ -427,7 +427,7 @@ uint8 build_metadata(void)
     system(REMOVE_DEFAULT_META_FOLDER);
     system(CREATE_DEFAULT_META_FOLDER);
 
-    sprintf(commandstr,"ls -ogh -lrtd $(find $PWD -type f -name '*.blx') | awk '{print $NF}' > %s",TEMPLATE_FILE_LIST);    
+    sprintf(commandstr,"ls -ltd $(find $PWD -type f -name '*.blx') | awk '{print $NF}' > %s",TEMPLATE_FILE_LIST);    
     if (system(commandstr) != 0) {
         fprintf(stderr, "Can not get source file list, please check your shell or path\n"); 
         return bret;
