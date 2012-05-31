@@ -311,6 +311,7 @@ void slinkedlst_insert(char * file_path)
 #if ENABLE_LINKED_LIST_TRACE == TRUE
          printf("...insert at the middle of X link\n");
 #endif
+         //TODO: a reset is here due to bfiof is NULL when sorting some file list....
          bfiof_prv->next     = bfiof_newnode;
          bfiof_newnode->next = bfiof_cursor;
     }

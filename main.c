@@ -45,7 +45,7 @@ pthread_mutex_t      g_thread_flag_mutex;   /* used to protect g_thread_pool */
     functions...
  **************************************************************************/
 
-uint8 scan_single_meta_file(FILE * fd_rd, FILE * fd_wr, uint32 init_free_heap)
+uint8 scan_single_meta_file(FILE * fd_rd, FILE * fd_wr, uint32 init_free_heap,uint8 bCheckHeapInit)
 {
     uint8 bret = FALSE;
 
@@ -77,10 +77,10 @@ uint8 scan_single_meta_file(FILE * fd_rd, FILE * fd_wr, uint32 init_free_heap)
         temp[0] = meta_unit->mft.hour[0];temp[1] = meta_unit->mft.hour[1];temp[2]='\0';
         hour   = strtouint32(temp);
 		
-		temp[0] = meta_unit->mft.minute[0];temp[1] = meta_unit->mft.minute[1];
+        temp[0] = meta_unit->mft.minute[0];temp[1] = meta_unit->mft.minute[1];
         minute = strtouint32(temp);
 		
-		temp[0] = meta_unit->mft.second[0];temp[1] = meta_unit->mft.second[1];
+        temp[0] = meta_unit->mft.second[0];temp[1] = meta_unit->mft.second[1];
         second = strtouint32(temp);
 
         if (last_hours == INVALID_HOUR) {
@@ -130,7 +130,9 @@ uint8 scan_single_meta_file(FILE * fd_rd, FILE * fd_wr, uint32 init_free_heap)
                   assert(1);
         }
 
-        if (find_begin_point) {
+        if (!bCheckHeapInit) {
+            fwrite(line_wr,strlen(line_wr),1,fd_wr);
+        } else if (find_begin_point) {
             fwrite(line_wr,strlen(line_wr),1,fd_wr);
         }
     }
@@ -139,7 +141,7 @@ uint8 scan_single_meta_file(FILE * fd_rd, FILE * fd_wr, uint32 init_free_heap)
     return bret;
 }
 
-uint8 build_csv(uint32 init_free_heap)
+uint8 build_csv(uint32 init_free_heap, uint8 bCheckHeapInit)
 {
     uint8 bret = FALSE;
  
@@ -200,7 +202,7 @@ uint8 build_csv(uint32 init_free_heap)
            break;
         }
 
-        if (scan_single_meta_file(fd_meta,fd_csv,init_free_heap) == FALSE)  {
+        if (scan_single_meta_file(fd_meta,fd_csv,init_free_heap,bCheckHeapInit) == FALSE)  {
            fprintf(stderr,"Scan %s failed\n",single_file_path);
            fclose(fd_meta);
            bret = FALSE;
@@ -225,7 +227,7 @@ uint8 build_csv(uint32 init_free_heap)
     return bret;
 }
 
-uint8 metadata_single_blx_file(uint32 fileindex,char * filepath)
+uint8 metadata_single_blx_file(uint32 tracetype,uint32 fileindex,char * filepath)
 {
     uint8 bret = FALSE;
 
@@ -233,7 +235,8 @@ uint8 metadata_single_blx_file(uint32 fileindex,char * filepath)
     FILE * fd_meta;
 
     uint8 cursor = 0;
-    HEAP_TRACE_INFO hti;
+    HEAP_TRACE_INFO           hti;
+    STANDARD_TRACE_SUB_HEADER stsh;
     
     char time_stamp[32] = {0};
 
@@ -241,6 +244,7 @@ uint8 metadata_single_blx_file(uint32 fileindex,char * filepath)
     char meta_file[MAX_PATH_LEN]; 
 
     memset(&hti,0x0,sizeof(HEAP_TRACE_INFO));
+    memset(&stsh,0x0,sizeof(STANDARD_TRACE_SUB_HEADER));
 
     blx_file = fopen(filepath, "rb");
     if (blx_file == NULL)  {
@@ -269,98 +273,180 @@ uint8 metadata_single_blx_file(uint32 fileindex,char * filepath)
             break;
         }
 
-        /* is it a Message id(0x94)? */
-        if (SIGNATURE_MESSAGE_ID != cursor ) {
-            continue;
-        }
+        switch (tracetype ) 
+        {  
+        case 0:     /* default type for MTBF trace */
+            /* is it a Message id(0x94)? */
+            if (SIGNATURE_MESSAGE_ID != cursor ) {
+                continue;
+            }
 
-        if (fread(&cursor, sizeof(uint8), 1, blx_file) != 1) {
-            break;
-        }
-
-        /* is it a Master(0x01)? */
-        if (SIGNATURE_MASTER != cursor ) {
-            fseek(blx_file, -1L, SEEK_CUR); /* if not then back 1 byte in case the byte is Message id... */
-            continue;
-        }
-
-        /* now we get '0x94,0x01' in blx,which means it may a heap message */
-        if (fread(&hti, sizeof(hti), 1, blx_file) != 1) {
-            break;
-        }
-
-        if (hti.type != SIGNATURE_HEAP_TYPE ) {
-            fseek(blx_file, -sizeof(hti)-1L, SEEK_CUR); /* if not then back sizeof(hti) bytes... */
-            continue;
-        }
-
-        switch (hti.id)
-        {
-            case SIGNATURE_HEAP_INIT:
-            case SIGNATURE_HEAP_DEALLOC:
-            case SIGNATURE_HEAP_ALLOC:
-            case SIGNATURE_HEAP_ALLOC_NO_WAIT:
-            case SIGNATURE_HEAP_COND_ALLOC:
-            case SIGNATURE_ALIGNED_ALLOC_NO_WAIT:
-            case SIGNATURE_ALIGNED_ALLOC:
-            case SIGNATURE_HEAP_ALLOC_NO_WAIT_FROM:
-                decode_timestamp(&hti.time[0],time_stamp);
+            if (fread(&cursor, sizeof(uint8), 1, blx_file) != 1) {
                 break;
+            }
 
-            default:
+            /* is it a Master(0x01)? */
+            if (SIGNATURE_MASTER != cursor ) {
+                fseek(blx_file, -1L, SEEK_CUR); /* if not then back 1 byte in case the byte is Message id... */
+                continue;
+            }
+
+            /* now we get '0x94,0x01' in blx,which means it may a heap message */
+            if (fread(&hti, sizeof(hti), 1, blx_file) != 1) {
+                break;
+            }
+
+            if (hti.type != SIGNATURE_HEAP_TYPE ) {
                 fseek(blx_file, -sizeof(hti)-1L, SEEK_CUR); /* if not then back sizeof(hti) bytes... */
                 continue;
-        }
+            }
+
+            switch (hti.id)
+            {
+                case SIGNATURE_HEAP_INIT:
+                case SIGNATURE_HEAP_DEALLOC:
+                case SIGNATURE_HEAP_ALLOC:
+                case SIGNATURE_HEAP_ALLOC_NO_WAIT:
+                case SIGNATURE_HEAP_COND_ALLOC:
+                case SIGNATURE_ALIGNED_ALLOC_NO_WAIT:
+                case SIGNATURE_ALIGNED_ALLOC:
+                case SIGNATURE_HEAP_ALLOC_NO_WAIT_FROM:
+                    decode_timestamp(&hti.time[0],time_stamp);
+                    break;
+
+                default:
+                    fseek(blx_file, -sizeof(hti)-1L, SEEK_CUR); /* if not then back sizeof(hti) bytes... */
+                    continue;
+            }
         
-        switch (hti.id)
-        {
-            case SIGNATURE_HEAP_INIT:
-                sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_INIT,0,0,0,0,0);
-                fwrite(metadata,strlen(metadata),1,fd_meta);                
-                break;
+            switch (hti.id)
+            {
+                case SIGNATURE_HEAP_INIT:
+                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_INIT,0,0,0,0,0);
+                    fwrite(metadata,strlen(metadata),1,fd_meta);                
+                    break;
 
-            case SIGNATURE_HEAP_DEALLOC:            
-                // printf("%s HOOK_HEAP_ALLOC_DEALLOC,ptr=0x%X\n",trace_time,GET_PTR(hti.ptr));
-                // fprintf(stdout,"%s,HEAP_DEALLOC,free size=%d(-%d)\n",trace_time,g_free_heap,freed_size);
-                sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_DEALLOCATE,GET_PTR(hti.ptr),0,0,
-                        GET_PTR(hti.hdt.caller1),GET_PTR(hti.hdt.caller2));
-                fwrite(metadata,strlen(metadata),1,fd_meta);
-                break;
+                case SIGNATURE_HEAP_DEALLOC:            
+                    // printf("%s HOOK_HEAP_ALLOC_DEALLOC,ptr=0x%X\n",trace_time,GET_PTR(hti.ptr));
+                    // fprintf(stdout,"%s,HEAP_DEALLOC,free size=%d(-%d)\n",trace_time,g_free_heap,freed_size);
+                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_DEALLOCATE,GET_PTR(hti.ptr),0,0,
+                            GET_PTR(hti.hdt.caller1),GET_PTR(hti.hdt.caller2));
+                    fwrite(metadata,strlen(metadata),1,fd_meta);
+                    break;
 
-            case SIGNATURE_HEAP_ALLOC:
-                sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(hti.ptr),GET_SIZE(hti.hat.size),AT_HEAP_ALLOC,
-                        GET_PTR(hti.hat.caller1), GET_PTR(hti.hat.caller2));
-                fwrite(metadata,strlen(metadata),1,fd_meta);
-                break; 
-            case SIGNATURE_HEAP_ALLOC_NO_WAIT:
-                sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(hti.ptr),GET_SIZE(hti.hat.size),AT_HEAP_ALLOC_NO_WAIT,
-                        GET_PTR(hti.hat.caller1), GET_PTR(hti.hat.caller2));
-                fwrite(metadata,strlen(metadata),1,fd_meta);
-                break; 
-            case SIGNATURE_HEAP_COND_ALLOC:
-                sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(hti.ptr),GET_SIZE(hti.hat.size),AT_HEAP_COND_ALLOC,
-                        GET_PTR(hti.hcat.caller1), GET_PTR(hti.hcat.caller2));
-                fwrite(metadata,strlen(metadata),1,fd_meta);
-                break; 
-            case SIGNATURE_ALIGNED_ALLOC_NO_WAIT:
-                sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(hti.ptr),GET_SIZE(hti.hat.size),AT_ALIGNED_ALLOC_NO_WAIT,
-                        GET_PTR(hti.haat.caller1), GET_PTR(hti.haat.caller2));
-                fwrite(metadata,strlen(metadata),1,fd_meta);
-                break; 
-            case SIGNATURE_ALIGNED_ALLOC:
-                sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(hti.ptr),GET_SIZE(hti.hat.size),AT_ALIGNED_ALLOC,
-                        GET_PTR(hti.haat.caller1), GET_PTR(hti.haat.caller2));
-                fwrite(metadata,strlen(metadata),1,fd_meta);
-                break; 
-            case SIGNATURE_HEAP_ALLOC_NO_WAIT_FROM:
-                sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(hti.ptr),GET_SIZE(hti.hat.size),AT_ALLOC_NO_WAIT_FROM,
-                        GET_PTR(hti.hanwft.caller1), GET_PTR(hti.hanwft.caller2));
-                fwrite(metadata,strlen(metadata),1,fd_meta);
-                break; 
-            default:
-                fseek(blx_file, -sizeof(hti)-1L, SEEK_CUR); /* if not then back sizeof(hti) bytes... */
+                case SIGNATURE_HEAP_ALLOC:
+                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(hti.ptr),GET_SIZE(hti.hat.size),AT_HEAP_ALLOC,
+                            GET_PTR(hti.hat.caller1), GET_PTR(hti.hat.caller2));
+                    fwrite(metadata,strlen(metadata),1,fd_meta);
+                    break; 
+                case SIGNATURE_HEAP_ALLOC_NO_WAIT:
+                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(hti.ptr),GET_SIZE(hti.hat.size),AT_HEAP_ALLOC_NO_WAIT,
+                            GET_PTR(hti.hat.caller1), GET_PTR(hti.hat.caller2));
+                    fwrite(metadata,strlen(metadata),1,fd_meta);
+                    break; 
+                case SIGNATURE_HEAP_COND_ALLOC:
+                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(hti.ptr),GET_SIZE(hti.hat.size),AT_HEAP_COND_ALLOC,
+                            GET_PTR(hti.hcat.caller1), GET_PTR(hti.hcat.caller2));
+                    fwrite(metadata,strlen(metadata),1,fd_meta);
+                    break; 
+                case SIGNATURE_ALIGNED_ALLOC_NO_WAIT:
+                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(hti.ptr),GET_SIZE(hti.hat.size),AT_ALIGNED_ALLOC_NO_WAIT,
+                            GET_PTR(hti.haat.caller1), GET_PTR(hti.haat.caller2));
+                    fwrite(metadata,strlen(metadata),1,fd_meta);
+                    break; 
+                case SIGNATURE_ALIGNED_ALLOC:
+                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(hti.ptr),GET_SIZE(hti.hat.size),AT_ALIGNED_ALLOC,
+                            GET_PTR(hti.haat.caller1), GET_PTR(hti.haat.caller2));
+                    fwrite(metadata,strlen(metadata),1,fd_meta);
+                    break; 
+                case SIGNATURE_HEAP_ALLOC_NO_WAIT_FROM:
+                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(hti.ptr),GET_SIZE(hti.hat.size),AT_ALLOC_NO_WAIT_FROM,
+                            GET_PTR(hti.hanwft.caller1), GET_PTR(hti.hanwft.caller2));
+                    fwrite(metadata,strlen(metadata),1,fd_meta);
+                    break; 
+                default:
+                    fseek(blx_file, -sizeof(hti)-1L, SEEK_CUR); /* if not then back sizeof(hti) bytes... */
+                    continue;
+            }
+            break;
+
+        case TRACE_TYPE_NOS:
+            //TODO: below code is just for 11.2 products....
+            if (0x1D != cursor ) {
                 continue;
-        }
+            }
+
+            if (fread(&cursor, sizeof(uint8), 1, blx_file) != 1) {
+                break;
+            }
+
+            if (0x10 != cursor ) {
+                fseek(blx_file, -1L, SEEK_CUR);
+                continue;
+            }
+
+            if (fread(&cursor, sizeof(uint8), 1, blx_file) != 1) {
+                break;
+            }
+
+            if (0x4C != cursor ) {
+                fseek(blx_file, -2L, SEEK_CUR);
+                continue;
+            }
+
+            if (fread(&cursor, sizeof(uint8), 1, blx_file) != 1) {
+                break;
+            }
+
+            if (0x7C != cursor ) {
+                fseek(blx_file, -3L, SEEK_CUR);
+                continue;
+            }
+
+            if (fread(&stsh, sizeof(stsh), 1, blx_file) != 1) {
+                break;
+            }
+
+            if (stsh.group_id != 0x80 ) {
+                fseek(blx_file, -sizeof(stsh)-1L, SEEK_CUR); /* if not then back sizeof(stsh) bytes... */
+                continue;
+            }
+
+            switch (stsh.trace_id)
+            {
+                case SIGNATURE_HEAP_DEALLOC:
+                case SIGNATURE_HEAP_ALLOC:
+                case SIGNATURE_HEAP_ALLOC_NO_WAIT:                
+                    decode_timestamp(&stsh.time[0],time_stamp);
+                    break;
+
+                default:
+                    fseek(blx_file, -sizeof(stsh)-1L, SEEK_CUR); /* if not then back sizeof(stsh) bytes... */
+                    continue;
+            }
+        
+            switch (stsh.trace_id)
+            {
+                case SIGNATURE_HEAP_DEALLOC:            
+                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_DEALLOCATE,GET_PTR(stsh.ptr),0,0,
+                            GET_PTR(stsh.hdt.caller1),GET_PTR(stsh.hdt.caller2));
+                    fwrite(metadata,strlen(metadata),1,fd_meta);
+                    break;
+
+                case SIGNATURE_HEAP_ALLOC:
+                case SIGNATURE_HEAP_ALLOC_NO_WAIT:
+                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(stsh.ptr),GET_SIZE(stsh.hat.size),AT_HEAP_ALLOC,
+                            GET_PTR(stsh.hat.caller1), GET_PTR(stsh.hat.caller2));
+                    fwrite(metadata,strlen(metadata),1,fd_meta);
+                    break; 
+
+                default:
+                    fseek(blx_file, -sizeof(stsh)-1L, SEEK_CUR); /* if not then back sizeof(stsh) bytes... */
+                    continue;
+            }
+            break;         
+        } /* end switch */
+        
 
     } /* end while */
 
@@ -375,6 +461,7 @@ void * working_thread(void * arg)
 {
     THREAD_PARAMETER * tp = malloc(sizeof(THREAD_PARAMETER));
  
+    tp->tracetype = ((THREAD_PARAMETER *)arg)->tracetype;
     tp->fileindex = ((THREAD_PARAMETER *)arg)->fileindex;
     tp->threadsid = ((THREAD_PARAMETER *)arg)->threadsid;
     strncpy(tp->filepath,((THREAD_PARAMETER *)arg)->filepath,MAX_PATH_LEN);
@@ -383,7 +470,7 @@ void * working_thread(void * arg)
     g_thread_pool[tp->threadsid].busy = TRUE;
     MUTEX_UNLOCK(g_thread_flag_mutex);
 
-    if (!metadata_single_blx_file(tp->fileindex,tp->filepath))  {
+    if (!metadata_single_blx_file(tp->tracetype,tp->fileindex,tp->filepath))  {
         fprintf(stderr, "Thread%d returns failed\n",tp->threadsid);
     }
 
@@ -397,7 +484,7 @@ void * working_thread(void * arg)
     pthread_exit(NULL);
 }
 
-uint8 build_metadata(void)
+uint8 build_metadata(char * trace_type)
 {
     uint8 bret = FALSE;
 
@@ -409,6 +496,7 @@ uint8 build_metadata(void)
     char   meta_file_path[MAX_PATH_LEN+1] = {0};
     char   commandstr[128];
 
+    uint32 t_type = (trace_type == NULL ? 0 : strtouint32(trace_type));
     uint32 fileindex;
     uint32 len,filenums = 0;
     uint16 lots_of_threads;
@@ -427,7 +515,8 @@ uint8 build_metadata(void)
     system(REMOVE_DEFAULT_META_FOLDER);
     system(CREATE_DEFAULT_META_FOLDER);
 
-    sprintf(commandstr,"ls -ltd $(find $PWD -type f -name '*.blx') | awk '{print $NF}' > %s",TEMPLATE_FILE_LIST);    
+    sprintf(commandstr,
+            "ls -l --sort=extension $(find $PWD -type f -name '*.blx') | awk '{print $NF}' > %s",TEMPLATE_FILE_LIST);
     if (system(commandstr) != 0) {
         fprintf(stderr, "Can not get source file list, please check your shell or path\n"); 
         return bret;
@@ -523,6 +612,7 @@ FIND_FREE_THREAD:
             if (g_thread_pool[lots_of_threads].busy == FALSE)  { 
 
                 g_thread_pool[lots_of_threads].busy = TRUE;
+                tp.tracetype = t_type;
                 tp.threadsid = lots_of_threads;
                 tp.fileindex = fileindex++;
                 strncpy(tp.filepath,single_file_path,MAX_PATH_LEN);
@@ -876,12 +966,18 @@ int main(int argc, char * argv[])
                    break;
 
                case 'b':                      /* -b, build meta data by scanning all blx files recursively */
-                   bret = build_metadata();
+                   bret = build_metadata(TRACE_TYPE_DEFAULT);
                    break;
 
                case 'g':                      /* -g, build big csv based on meta files                     */
-                   bret = build_csv(DEFAULT_TOTAL_FREE_HEAP);
-                   break;           
+                   bret = build_csv(DEFAULT_TOTAL_FREE_HEAP,TRUE);
+                   break;
+
+               case 'n':                      /* -ng, build big csv based on meta files,no need to check heap_init  */
+                   if (argv[1][2] == 'g')  {
+                       bret = build_csv(DEFAULT_TOTAL_FREE_HEAP,FALSE);
+                   }
+                   break;
 
                case 'r':                      /* -r, generate general heap report  */
                    //TODO
@@ -894,7 +990,7 @@ int main(int argc, char * argv[])
            }
            break;
 
-       case 3:  /* -s, -t */
+       case 3:  /* -s, -t, -b */
            if (argv[1][0] != '-' ) {
                 goto MISSING_OR_WRONG_OPTIONS;
            } 
@@ -909,14 +1005,27 @@ int main(int argc, char * argv[])
                    bret = opt_handler_t(argv[2]);
                    break;
 
+               case 'b':
+                   bret = build_metadata(argv[2]);
+                   break;
+
                case 'g':               /* -g <init_heap_size> */
                    if (get_expression_result(argv[2]) > 0)  {
-                       bret = build_csv(get_expression_result(argv[2]));
+                       bret = build_csv(get_expression_result(argv[2]),TRUE);
                    } else {
                        show_usage();
                        return 1;
                    }
                    break;
+
+               case 'n':               /* -ng <init_heap_size>,no need to check heap_init */
+                   if (argv[1][2] == 'g' && get_expression_result(argv[2]) > 0)  {
+                       bret = build_csv(get_expression_result(argv[2]),FALSE);
+                   } else {
+                       show_usage();
+                       return 1;
+                   }
+                   break;                 
 
                default:
                    break;

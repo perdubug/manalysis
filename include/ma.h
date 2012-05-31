@@ -85,6 +85,9 @@ typedef signed int         sint32;
 #define ENABLE_LINKED_LIST_TRACE FALSE
 #define ENABLE_HEAP_TRACE        FALSE
 
+#define TRACE_TYPE_DEFAULT 0
+#define TRACE_TYPE_NOS     1
+
 #define MUTEX_LOCK(r)   pthread_mutex_lock(&r)
 #define MUTEX_UNLOCK(r) pthread_mutex_unlock(&r)
 
@@ -187,6 +190,34 @@ typedef struct HEAP_TRACE_INFO {
 
 } HEAP_TRACE_INFO;
 
+typedef struct  STANDARD_TRACE_SUB_HEADER {
+    uint8 length[2];
+    uint8 receiver_obj;
+    uint8 sender_obj;
+    uint8 transactoin_id;
+    uint8 group_id;
+    uint8 trace_id;
+    uint8 filler;
+    uint8 time[8];
+    uint8 task[2];
+    uint8 ptr[4];
+
+    union {
+      HEAP_ALLOC_TAIL         hat;
+      HEAP_DEALLOC_TAIL       hdt;
+    };
+}STANDARD_TRACE_SUB_HEADER;
+
+typedef struct  STANDARD_TRACE_HEADER{
+    uint8 media;
+    uint8 receiver_device;
+    uint8 sender_device;
+    uint8 resource;
+
+    STANDARD_TRACE_SUB_HEADER stsh;
+    
+}STANDARD_TRACE_HEADER;
+
 typedef struct HEAP_LINK_NODE {
     uint32 addr;
     uint32 size;
@@ -210,6 +241,7 @@ typedef struct BLX_FILE_LIST_NODE {
 } BLX_FILE_LIST_NODE;
 
 typedef struct THREAD_PARAMETER {
+    uint32    tracetype;               /* TODO:the trace get from difference source need to be decoded with difference way */
     uint32    fileindex;               /* use to make all blx files name unique     */   
     uint16    threadsid;               /* thread index                              */
     char      filepath[MAX_PATH_LEN];  /* which blx file the thread needs to decode */ 
@@ -234,7 +266,7 @@ typedef struct META_FORMAT_TIME {
 /* for .meta file */
 typedef struct META_FORMAT_UNIT {
     META_FORMAT_TIME mft;
-	char skip;    
+    char skip;    
     char type;      /* + means deallocation, - mean allocation */
     char skip2;
     char address[8];
