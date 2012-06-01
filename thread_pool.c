@@ -27,7 +27,10 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <semaphore.h>
 
+#include "types.h"
+#include "ma.h"
 #include "thread_pool.h"
 
 /* _threadpool is the internal threadpool structure that is
@@ -40,8 +43,8 @@ typedef struct work_st{
 } work_t;
 
 /*
-   you should fill in this structure with whatever you need
-   queue is for holding jobs need to process by thread pool 
+   - queue is for holding jobs need to process by thread pool
+   - only one instance of the struct,but each thread has its reference(thread input parameter)
  */
 typedef struct _threadpool_st {
     uint16          num_threads; /* number of threads in the pool     */
@@ -56,25 +59,30 @@ typedef struct _threadpool_st {
     uint8           dont_accept; /* TODO:Do I really need this to destory pool?  */
 } _threadpool;
 
+sem_t g_pool_sem; /* after thread pool creation done,then enable all working threads */
+
 /* This function is the work function of the thread */
 void * tp_working_thread(threadpool p)
 {
-    _threadpool * pool = (_threadpool *) p;
-    work_t * cur;  /* The q element */
+    _threadpool * pool = (_threadpool *)p;
+    work_t * cur;  /* The queue element */
 
-    while(1)  {
+    fprintf(stdout,"%sThread%u is created...%s\n",gray,(uint32)pthread_self(),none);
+
+    while (1)  {
         //pool->qsize = pool->qsize;
         pthread_mutex_lock(&(pool->qlock));  /* get the q lock.  */
 
-        while( pool->qsize == 0) {  /* if the size is 0 then wait. */
+        while (pool->qsize == 0) {  /* if the size is 0 then wait. */
             if(pool->shutdown) {
                 pthread_mutex_unlock(&(pool->qlock));
                 pthread_exit(NULL);
             }
             
             /*  wait until the condition says its no emtpy and give up the lock.  */
-            pthread_mutex_unlock(&(pool->qlock));  /* get the qlock. */
+            fprintf(stdout,"%sQueue is empty,waiting...%s\n",gray,none);
             pthread_cond_wait(&(pool->q_not_empty),&(pool->qlock));
+            pthread_mutex_unlock(&(pool->qlock));  /* get the qlock. */
 
             /*  check to see if in shutdown mode. */                         
             if(pool->shutdown) {
@@ -100,18 +108,16 @@ void * tp_working_thread(threadpool p)
        }
     
        pthread_mutex_unlock(&(pool->qlock));
-       
+    
+       fprintf(stdout,"%sThread%u is working on %s%s\n",cyan,(uint32)pthread_self(),((THREAD_PARAMETER *)(cur->arg))->filepath,none);
        (cur->routine) (cur->arg);   /*  actually do work.      */
        free(cur);                   /*  free the work storage. */
-       
     } /* end-while(1) */
 }
 
-threadpool tp_create_threadpool(uint8 num_threads_in_pool) 
+threadpool tp_init_threadpool(uint8 num_threads_in_pool) 
 {
     _threadpool *pool;
-    uint8 i;
-    int s;
 
     /* sanity check the argument */
     if ((num_threads_in_pool <= 0) || (num_threads_in_pool > MAXT_IN_POOL))  {
@@ -125,7 +131,6 @@ threadpool tp_create_threadpool(uint8 num_threads_in_pool)
     }
 
     pool->threads = (pthread_t*) malloc (sizeof(pthread_t) * num_threads_in_pool);
-
     if(!pool->threads) {
         fprintf(stderr, "Out of memory creating a new threadpool!\n");
         return NULL;  
@@ -140,7 +145,7 @@ threadpool tp_create_threadpool(uint8 num_threads_in_pool)
 
     /* initialize mutex and condition variables. */
     if(pthread_mutex_init(&pool->qlock,NULL))  {
-        fprintf(stderr, "Mutex initiation error!\n");
+        fprintf(stderr, "working thread mutex initiation error!\n");
         return NULL;
     }
 
@@ -154,15 +159,25 @@ threadpool tp_create_threadpool(uint8 num_threads_in_pool)
         return NULL;
     }
 
+    return (threadpool) pool;
+}
+
+void tp_start_threadpool(threadpool tpool) 
+{
+    uint8 i;
+    int s;
+
+    _threadpool *pool = (_threadpool *) tpool;
+
     /* make threads */
-    for (i = 0;i < num_threads_in_pool;i++)  {
+    for (i = 0;i < pool->num_threads;i++)  {
         s = pthread_create(&(pool->threads[i]),NULL,tp_working_thread,pool);
         if (s != 0)  {
             handle_error_en(s, "pthread_create failed");
         }
     }
 
-    return (threadpool) pool;
+    return;
 }
 
 void tp_dispatch(threadpool tpool, dispatch_fn dispatch_to_here, void *arg) 

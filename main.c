@@ -265,7 +265,7 @@ void metadata_single_blx_file(void * arg)
        return;
     }
 
-    fprintf(stdout,"Processing %s...\n",tp->filepath);
+    //fprintf(stdout,"Processing %s...\n",tp->filepath);
     fseek(blx_file, 0L, SEEK_SET);
 
     /*
@@ -537,7 +537,7 @@ uint8 build_metadata(char * trace_type)
     gettimeofday(&startTime, NULL);
     fileindex = 0;
     
-    tpool = tp_create_threadpool(MAX_NUM_THREADS);
+    tpool = tp_init_threadpool(MAX_NUM_THREADS);
 
     while (fgets(single_file_path, MAX_PATH_LEN, fd_blx_list_file) != 0) {
 
@@ -591,15 +591,17 @@ uint8 build_metadata(char * trace_type)
         /* Is it necessary here? */
         memset(single_file_path,0x0,MAX_PATH_LEN);
 
-    } /* end-while */    
+    } /* end-while */
 
     fclose(fd_blx_list_file);
     fclose(fd_meta_list_file);
-    
-    tp_destroy_threadpool(tpool);
+
+    tp_start_threadpool(tpool);
 
     /* get the end time */
     gettimeofday(&endTime, NULL);
+
+    tp_destroy_threadpool(tpool);
 
     /* calculate time in microseconds */
     wall_clock_counter = (endTime.tv_sec*1000000  + (endTime.tv_usec)) - (startTime.tv_sec*1000000 + (startTime.tv_usec));

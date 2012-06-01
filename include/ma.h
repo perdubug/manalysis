@@ -1,3 +1,6 @@
+#ifndef MA_H
+#define MA_H
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -69,8 +72,9 @@
 #define MAX_PATH_LEN             512
 #define MAX_INDEX_LEN            5
 #define MAX_SINGLE_METADATA_LEN  128
-#define MAX_NUM_THREADS          5
 #define MAX_THEORY_HEAP_SIZE     0xFFFFFFFF
+
+#define MAX_NUM_THREADS          7  /* must lower than MAXT_IN_POOL */
 
 #define ENABLE_TRACE_GENERAL     FALSE
 #define ENABLE_TRACE_INFO        FALSE
@@ -98,6 +102,15 @@
 
 #define SIGNATURE_HEAP_INIT               0x79  /* HOOK_HEAP__INIT                  */
 
+#define red   "\033[0;31m"        /* 0 -> normal ;  31 -> red */
+#define cyan  "\033[1;36m"        /* 1 -> bold ;  36 -> cyan */
+#define green "\033[4;32m"        /* 4 -> underline ;  32 -> green */
+#define blue  "\033[9;34m"        /* 9 -> strike ;  34 -> blue */
+#define black  "\033[0;30m"
+#define brown  "\033[0;33m"
+#define magenta  "\033[0;35m"
+#define gray  "\033[0;37m"
+#define none   "\033[0m"          /* to flush the previous property */
 /************************************************************************** 
    structs...
  **************************************************************************/
@@ -327,3 +340,6 @@ uint32 halloc_info_linkedlst_get_size(uint32 addr);
 void sort_filelist(char * path);
 
 uint16 decode_timestamp(uint8 * bytestream,char * timestring);
+
+#endif
+

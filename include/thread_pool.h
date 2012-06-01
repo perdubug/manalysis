@@ -6,7 +6,7 @@
 #include "types.h"
 
 /* maximum number of threads allowed in a pool   */
-#define MAXT_IN_POOL 32
+#define MAXT_IN_POOL 200
 
 #define handle_error_en(en, msg) do { errno = en; perror(msg); exit(EXIT_FAILURE); } while (0)
 #define handle_error(msg)        do { perror(msg); exit(EXIT_FAILURE); } while (0)
@@ -25,10 +25,10 @@ typedef void * threadpool;
 typedef void (*dispatch_fn)(void *);
 
 /**
- * create_threadpool creates a fixed-sized thread pool.  If the function succeeds, it returns a (non-NULL)
+ * init a fixed-sized thread pool.  If the function succeeds, it returns a (non-NULL)
  * "threadpool", else it returns NULL.
  */
-threadpool tp_create_threadpool(uint8 num_threads_in_pool);
+threadpool tp_init_threadpool(uint8 num_threads_in_pool);
 
 
 /**
@@ -46,6 +46,11 @@ void tp_dispatch(threadpool tpool, dispatch_fn dispatch_to_here,void *arg);
  * frees all the memory associated with the threadpool.
  */
 void tp_destroy_threadpool(threadpool destroyme);
+
+/**
+ * create threads
+ */
+void tp_start_threadpool(threadpool tpool);
 
 #endif
 
