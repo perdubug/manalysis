@@ -10,14 +10,7 @@
 #include <pthread.h>
 #include <libgen.h>
 
-/************************************************************************** 
-   Data types...
- **************************************************************************/
-typedef unsigned char      uint8;
-typedef short              uint16;
-typedef unsigned int       uint32;
-typedef unsigned long long uint64;
-typedef signed int         sint32;
+#include "types.h"
 
 /************************************************************************** 
    Macros...
@@ -88,9 +81,6 @@ typedef signed int         sint32;
 #define TRACE_TYPE_DEFAULT 0
 #define TRACE_TYPE_NOS     1
 
-#define MUTEX_LOCK(r)   pthread_mutex_lock(&r)
-#define MUTEX_UNLOCK(r) pthread_mutex_unlock(&r)
-
 #define SET_DEFAULT_START_DATE(date)  {date.day = 3;date.month = 3;date.year = 2012;}
 /**
  * Signature bytes used when searching for heap trace messages
@@ -107,9 +97,6 @@ typedef signed int         sint32;
 #define SIGNATURE_ALIGNED_ALLOC           0x8B  /* HOOK_ALIGNED_BLOCK_ALLOC         */
 
 #define SIGNATURE_HEAP_INIT               0x79  /* HOOK_HEAP__INIT                  */
-
-#define handle_error_en(en, msg) do { errno = en; perror(msg); exit(EXIT_FAILURE); } while (0)
-#define handle_error(msg)        do { perror(msg); exit(EXIT_FAILURE); } while (0)
 
 /************************************************************************** 
    structs...
@@ -246,7 +233,6 @@ typedef struct BLX_FILE_LIST_NODE {
 typedef struct THREAD_PARAMETER {
     uint32    tracetype;               /* TODO:the trace get from difference source need to be decoded with difference way */
     uint32    fileindex;               /* use to make all blx files name unique     */   
-    uint16    threadsid;               /* thread index                              */
     char      filepath[MAX_PATH_LEN];  /* which blx file the thread needs to decode */ 
 }THREAD_PARAMETER;
 
@@ -318,9 +304,6 @@ typedef struct  TRACE_TIME{
 extern TRACE_DATE           g_trace_date;
 extern BLX_FILE_LIST_NODE * g_bfln_header;
 extern HEAP_LINK_NODE     * g_heap_link;
-
-extern THREAD_UNIT          g_thread_pool[MAX_NUM_THREADS];
-extern pthread_mutex_t      g_thread_flag_mutex;   /* used to protect g_thread_pool */
 
 /************************************************************************** 
    functions...

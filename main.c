@@ -31,6 +31,7 @@
 #include <sys/mman.h>
 
 #include "ma.h"
+#include "thread_pool.h"
 
 /************************************************************************** 
    global variables...
@@ -38,9 +39,6 @@
 TRACE_DATE           g_trace_date;
 BLX_FILE_LIST_NODE * g_bfln_header;
 HEAP_LINK_NODE     * g_heap_link;
-
-THREAD_UNIT          g_thread_pool[MAX_NUM_THREADS];
-pthread_mutex_t      g_thread_flag_mutex;   /* used to protect g_thread_pool */
 
 /************************************************************************** 
     functions...
@@ -228,9 +226,9 @@ uint8 build_csv(uint32 init_free_heap, uint8 bCheckHeapInit)
     return bret;
 }
 
-uint8 metadata_single_blx_file(uint32 tracetype,uint32 fileindex,char * filepath)
+void metadata_single_blx_file(void * arg)
 {
-    uint8 bret = FALSE;
+    THREAD_PARAMETER * tp = (THREAD_PARAMETER *)arg;
 
     FILE * blx_file;
     FILE * fd_meta;
@@ -244,23 +242,30 @@ uint8 metadata_single_blx_file(uint32 tracetype,uint32 fileindex,char * filepath
     char metadata[MAX_SINGLE_METADATA_LEN] = {0};
     char meta_file[MAX_PATH_LEN]; 
 
+    if (tp == NULL) {
+        assert(1);
+    }
+
     memset(&hti,0x0,sizeof(HEAP_TRACE_INFO));
     memset(&stsh,0x0,sizeof(STANDARD_TRACE_SUB_HEADER));
 
-    blx_file = fopen(filepath, "rb");
+    blx_file = fopen(tp->filepath, "rb");
     if (blx_file == NULL)  {
-       fprintf(stderr,"Could not open %s\n",filepath);
-       return bret;
+       fprintf(stderr,"Could not open %s\n",tp->filepath);
+       free(tp);
+       return;
     }
 
-    sprintf(meta_file,"%s%s.%d%s",DEFAULT_META_FOLDER_PREFIX,basename(filepath),fileindex,DEFAULT_META_FILE_SUFFRIX);
+    sprintf(meta_file,"%s%s.%d%s",DEFAULT_META_FOLDER_PREFIX,basename(tp->filepath),tp->fileindex,DEFAULT_META_FILE_SUFFRIX);
     fd_meta = fopen(meta_file, "a");
     if (fd_meta == NULL)  {
        fclose(blx_file);
+       free(tp);
        fprintf(stderr,"Could not create %s\n",meta_file);
-       return bret;
+       return;
     }
 
+    fprintf(stdout,"Processing %s...\n",tp->filepath);
     fseek(blx_file, 0L, SEEK_SET);
 
     /*
@@ -274,7 +279,7 @@ uint8 metadata_single_blx_file(uint32 tracetype,uint32 fileindex,char * filepath
             break;
         }
 
-        switch (tracetype ) 
+        switch (tp->tracetype ) 
         {  
         case TRACE_TYPE_DEFAULT:     /* default type for MTBF trace */
             /* is it a Message id(0x94)? */
@@ -453,37 +458,12 @@ uint8 metadata_single_blx_file(uint32 tracetype,uint32 fileindex,char * filepath
 
     fclose(blx_file);
     fclose(fd_meta);
-
-    bret = TRUE;
-    return bret;
-}
-
-void * working_thread(void * arg)
-{
-    THREAD_PARAMETER * tp = malloc(sizeof(THREAD_PARAMETER));
- 
-    tp->tracetype = ((THREAD_PARAMETER *)arg)->tracetype;
-    tp->fileindex = ((THREAD_PARAMETER *)arg)->fileindex;
-    tp->threadsid = ((THREAD_PARAMETER *)arg)->threadsid;
-    strncpy(tp->filepath,((THREAD_PARAMETER *)arg)->filepath,MAX_PATH_LEN);
-
-    MUTEX_LOCK(g_thread_flag_mutex);
-    g_thread_pool[tp->threadsid].busy = TRUE;
-    MUTEX_UNLOCK(g_thread_flag_mutex);
-
-    if (!metadata_single_blx_file(tp->tracetype,tp->fileindex,tp->filepath))  {
-        fprintf(stderr, "Thread%d returns failed\n",tp->threadsid);
-    }
-
-    MUTEX_LOCK(g_thread_flag_mutex);
-    g_thread_pool[tp->threadsid].busy = FALSE;
-    MUTEX_UNLOCK(g_thread_flag_mutex);
-
-    fprintf(stdout,"Thread%d done\n",tp->threadsid);
+    
     free(tp);
 
-    pthread_exit(NULL);
+    return;
 }
+
 
 uint8 build_metadata(char * trace_type)
 {
@@ -500,20 +480,19 @@ uint8 build_metadata(char * trace_type)
     uint32 t_type = (trace_type == NULL ? 0 : strtouint32(trace_type));
     uint32 fileindex;
     uint32 len,filenums = 0;
-    uint16 lots_of_threads;
 
     struct timeval startTime;
     struct timeval endTime;
 
-    double wall_clock_counter = 0;
+    threadpool tpool;
+    
+    THREAD_PARAMETER * tp;
 
-    int s;
+    double wall_clock_counter = 0;
 
     static uint8 has_start_date = FALSE; /* we need an initialization date to cover 120 hours timeline */
     struct stat stbuf;
     struct tm * tm_date;
-
-    THREAD_PARAMETER tp;  /* each thread will have a copy of input parameter! */
 
     system(REMOVE_DEFAULT_META_FOLDER);
     system(CREATE_DEFAULT_META_FOLDER);
@@ -552,20 +531,13 @@ uint8 build_metadata(char * trace_type)
         return bret;
     }
 
-    /* init thread mutex and pool */
-    pthread_mutex_init(&g_thread_flag_mutex, NULL);
-    for (lots_of_threads = 0; lots_of_threads < MAX_NUM_THREADS; lots_of_threads++)   {
-        MUTEX_LOCK(g_thread_flag_mutex);
-        g_thread_pool[lots_of_threads].pt   = 0;
-        g_thread_pool[lots_of_threads].busy = FALSE;
-        MUTEX_UNLOCK(g_thread_flag_mutex);
-    }
-
     /* get the current time(wall-clock time)
        - NULL because we don't care about time zone
      */
     gettimeofday(&startTime, NULL);
     fileindex = 0;
+    
+    tpool = tp_create_threadpool(MAX_NUM_THREADS);
 
     while (fgets(single_file_path, MAX_PATH_LEN, fd_blx_list_file) != 0) {
 
@@ -604,64 +576,27 @@ uint8 build_metadata(char * trace_type)
             }
         }        
 
-FIND_FREE_THREAD:
-        lots_of_threads = 0;
-
-        MUTEX_LOCK(g_thread_flag_mutex);
+        /* add a job with input parameters(single_file_path) into thread pool. The job will handle by metadata_single_blx_file function */
+        tp = malloc(sizeof(THREAD_PARAMETER));
         
-        /* try to find a free thread from pool to decode the file */        
-        for (lots_of_threads = 0; lots_of_threads < MAX_NUM_THREADS; lots_of_threads++)  {
+        tp->tracetype = t_type;
+        tp->fileindex = fileindex++;
+        strncpy(tp->filepath,single_file_path,MAX_PATH_LEN);
 
-            if (g_thread_pool[lots_of_threads].busy == FALSE)  { 
+        sprintf(meta_file_path,"%s%s.%d%s\n",DEFAULT_META_FOLDER_PREFIX,basename(single_file_path),tp->fileindex,DEFAULT_META_FILE_SUFFRIX);
+        fwrite(meta_file_path,strlen(meta_file_path),1,fd_meta_list_file);
 
-                g_thread_pool[lots_of_threads].busy = TRUE;
-                tp.tracetype = t_type;
-                tp.threadsid = lots_of_threads;
-                tp.fileindex = fileindex++;
-                strncpy(tp.filepath,single_file_path,MAX_PATH_LEN);
-
-                sprintf(meta_file_path,"%s%s.%d%s\n",DEFAULT_META_FOLDER_PREFIX,basename(single_file_path),tp.fileindex,DEFAULT_META_FILE_SUFFRIX);
-                fwrite(meta_file_path,strlen(meta_file_path),1,fd_meta_list_file);
-                   
-                fprintf(stdout, "Processing %s by thread%d...\n",tp.filepath,tp.threadsid);
-
-                s = pthread_create(&(g_thread_pool[lots_of_threads].pt), NULL,working_thread, (void *)&tp);
-                if (s != 0)  {
-                   handle_error_en(s, "pthread_create");
-                }
-
-                sleep(1);
-                break;
-            } 
-        }
-
-        MUTEX_UNLOCK(g_thread_flag_mutex);
-        
-        if (lots_of_threads >= MAX_NUM_THREADS) {
-
-            /* wait for a free thread is all threads are busying...             
-             */ 
-            fprintf(stdout,"Waiting for free thread...\n");
-            sleep(1);
-            goto FIND_FREE_THREAD;
-        }
+        tp_dispatch(tpool, metadata_single_blx_file, (void *)tp);
 
         /* Is it necessary here? */
         memset(single_file_path,0x0,MAX_PATH_LEN);
 
-    } /* end-while */
-
-    for (lots_of_threads = 0; lots_of_threads < MAX_NUM_THREADS; lots_of_threads++)  {
-
-        if (g_thread_pool[lots_of_threads].pt) {
-            pthread_join(g_thread_pool[lots_of_threads].pt,NULL);
-        }
-    }
-
-    pthread_mutex_destroy(&g_thread_flag_mutex);
+    } /* end-while */    
 
     fclose(fd_blx_list_file);
     fclose(fd_meta_list_file);
+    
+    tp_destroy_threadpool(tpool);
 
     /* get the end time */
     gettimeofday(&endTime, NULL);
