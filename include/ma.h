@@ -108,6 +108,9 @@ typedef signed int         sint32;
 
 #define SIGNATURE_HEAP_INIT               0x79  /* HOOK_HEAP__INIT                  */
 
+#define handle_error_en(en, msg) do { errno = en; perror(msg); exit(EXIT_FAILURE); } while (0)
+#define handle_error(msg)        do { perror(msg); exit(EXIT_FAILURE); } while (0)
+
 /************************************************************************** 
    structs...
  **************************************************************************/

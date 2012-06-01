@@ -5,7 +5,8 @@
  * History:
  *     20/05/2012   Yang Ming  Init version.
  *     28/05/2012   Yang Ming  Add heap_init in meta file
- *                             Start recording csv file from heap_init                    
+ *                             Start recording csv file from heap_init
+ *     31/05/2012   Yang Ming  Support '-ng' and '-b <type>' options
  *
  * How to build it?
  *     - Linux(Default)
@@ -275,28 +276,28 @@ uint8 metadata_single_blx_file(uint32 tracetype,uint32 fileindex,char * filepath
 
         switch (tracetype ) 
         {  
-        case 0:     /* default type for MTBF trace */
+        case TRACE_TYPE_DEFAULT:     /* default type for MTBF trace */
             /* is it a Message id(0x94)? */
-            if (SIGNATURE_MESSAGE_ID != cursor ) {
+            if (SIGNATURE_MESSAGE_ID != cursor )  {
                 continue;
             }
 
-            if (fread(&cursor, sizeof(uint8), 1, blx_file) != 1) {
+            if (fread(&cursor, sizeof(uint8), 1, blx_file) != 1)  {
                 break;
             }
 
             /* is it a Master(0x01)? */
-            if (SIGNATURE_MASTER != cursor ) {
+            if (SIGNATURE_MASTER != cursor )  {
                 fseek(blx_file, -1L, SEEK_CUR); /* if not then back 1 byte in case the byte is Message id... */
                 continue;
             }
 
             /* now we get '0x94,0x01' in blx,which means it may a heap message */
-            if (fread(&hti, sizeof(hti), 1, blx_file) != 1) {
+            if (fread(&hti, sizeof(hti), 1, blx_file) != 1)   {
                 break;
             }
 
-            if (hti.type != SIGNATURE_HEAP_TYPE ) {
+            if (hti.type != SIGNATURE_HEAP_TYPE )   {
                 fseek(blx_file, -sizeof(hti)-1L, SEEK_CUR); /* if not then back sizeof(hti) bytes... */
                 continue;
             }
@@ -506,6 +507,8 @@ uint8 build_metadata(char * trace_type)
 
     double wall_clock_counter = 0;
 
+    int s;
+
     static uint8 has_start_date = FALSE; /* we need an initialization date to cover 120 hours timeline */
     struct stat stbuf;
     struct tm * tm_date;
@@ -621,9 +624,10 @@ FIND_FREE_THREAD:
                 fwrite(meta_file_path,strlen(meta_file_path),1,fd_meta_list_file);
                    
                 fprintf(stdout, "Processing %s by thread%d...\n",tp.filepath,tp.threadsid);
-                if (pthread_create(&(g_thread_pool[lots_of_threads].pt), NULL,working_thread, (void *)&tp) != 0)  {
-                   fprintf(stderr,"Working thread creation failed when processing %s\n",single_file_path);
-                   exit(EXIT_FAILURE);
+
+                s = pthread_create(&(g_thread_pool[lots_of_threads].pt), NULL,working_thread, (void *)&tp);
+                if (s != 0)  {
+                   handle_error_en(s, "pthread_create");
                 }
 
                 sleep(1);
@@ -933,11 +937,14 @@ void show_usage(void)
     fprintf(stdout,"Options:\r\n");
     fprintf(stdout,"  Currently, the following options are supported...\r\n");
     fprintf(stdout,"   -b                   build meta data by scanning all blx files recursively and generate metadata at %s\r\n",DEFAULT_META_FOLDER_PREFIX);
+    fprintf(stdout,"   -b <type>            same as -b, <type> indicate trace type, default type is MTBF trace,1 mean 11.2 trace \r\n");
     fprintf(stdout,"   -r                   output general heap usage\r\n");
     fprintf(stdout,"   -s <sampling rate>   generate a csv with specified sampling rate\r\n");
     fprintf(stdout,"   -t <minutes>         generate a csv by sampling every <minutes>\r\n");
     fprintf(stdout,"   -g                   generate a completely csv file based on meta files\r\n");
-    fprintf(stdout,"   -g <free heap size>  generate a completely csv file based on meta files by specified init free heap size\r\n");
+    fprintf(stdout,"   -g <free heap size>  same as -g, but specify init free heap size\r\n");
+    fprintf(stdout,"   -ng <init_heap_size>,same as -g, but specify init free heap size, and no need to check heap_init \r\n");
+    fprintf(stdout,"   -ng                  same as -g, same as -g, but use default init free heap size,and no need to check heap_init \r\n");
     fprintf(stdout,"\r\n");
 }
 
@@ -969,11 +976,11 @@ int main(int argc, char * argv[])
                    bret = build_metadata(TRACE_TYPE_DEFAULT);
                    break;
 
-               case 'g':                      /* -g, build big csv based on meta files                     */
+               case 'g':                      /* -g, build big csv based on meta files with default total heap size   */
                    bret = build_csv(DEFAULT_TOTAL_FREE_HEAP,TRUE);
                    break;
 
-               case 'n':                      /* -ng, build big csv based on meta files,no need to check heap_init  */
+               case 'n':                      /* -ng, build big csv based on meta files with default total free heap size,no need to check heap_init  */
                    if (argv[1][2] == 'g')  {
                        bret = build_csv(DEFAULT_TOTAL_FREE_HEAP,FALSE);
                    }
@@ -1005,7 +1012,7 @@ int main(int argc, char * argv[])
                    bret = opt_handler_t(argv[2]);
                    break;
 
-               case 'b':
+               case 'b':               /* -b <type>, build blx based on type. Default type is for MTBF trace */
                    bret = build_metadata(argv[2]);
                    break;
 

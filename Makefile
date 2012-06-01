@@ -2,7 +2,7 @@ IDIR   =./include
 CC     = gcc
 CFLAGS = -I$(IDIR)
 
-LIBS   = -lm -lpthread
+LIBS   = -lm -pthread
 
 _DEPS = ma.h
 DEPS  = $(patsubst %,$(IDIR)/%,$(_DEPS))
