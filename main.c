@@ -46,8 +46,6 @@ HEAP_LINK_NODE     * g_heap_link;
 
 uint8 scan_single_meta_file(FILE * fd_rd, FILE * fd_wr, uint32 init_free_heap,uint8 bCheckHeapInit)
 {
-    uint8 bret = FALSE;
-
     META_FORMAT_UNIT * meta_unit;
     uint32 hour,minute,second;
     uint32 size;
@@ -136,8 +134,7 @@ uint8 scan_single_meta_file(FILE * fd_rd, FILE * fd_wr, uint32 init_free_heap,ui
         }
     }
 
-    bret = TRUE;
-    return bret;
+    return find_begin_point;
 }
 
 uint8 build_csv(uint32 init_free_heap, uint8 bCheckHeapInit)
@@ -150,6 +147,8 @@ uint8 build_csv(uint32 init_free_heap, uint8 bCheckHeapInit)
     FILE * fd_date;
  
     uint16 len;
+
+    uint8  hasHeapInit = FALSE;
 
     struct timeval startTime;
     struct timeval endTime;
@@ -201,12 +200,8 @@ uint8 build_csv(uint32 init_free_heap, uint8 bCheckHeapInit)
            break;
         }
 
-        if (scan_single_meta_file(fd_meta,fd_csv,init_free_heap,bCheckHeapInit) == FALSE)  {
-           fprintf(stderr,"Scan %s failed\n",single_file_path);
-           fclose(fd_meta);
-           bret = FALSE;
-           break;
-        }
+        bret = scan_single_meta_file(fd_meta,fd_csv,init_free_heap,bCheckHeapInit);
+        hasHeapInit = (bret == TRUE? TRUE : hasHeapInit);
 
         fclose(fd_meta);
 
@@ -217,6 +212,10 @@ uint8 build_csv(uint32 init_free_heap, uint8 bCheckHeapInit)
 
     /* get the end time */
     gettimeofday(&endTime, NULL);
+
+    if (!hasHeapInit) {
+        fprintf(stdout,"Warning: HEA_INIT no found!\n");
+    }
 
     /* calculate time in microseconds */
     wall_clock_counter = (endTime.tv_sec*1000000  + (endTime.tv_usec)) - (startTime.tv_sec*1000000 + (startTime.tv_usec));
@@ -233,22 +232,27 @@ void metadata_single_blx_file(void * arg)
     FILE * blx_file;
     FILE * fd_meta;
 
-    uint8 cursor = 0;
-    HEAP_TRACE_INFO           hti;
-    STANDARD_TRACE_SUB_HEADER stsh;
+    STANDARD_MTBF_TRACE_HEADER smth;
+    STANDARD_MTBF_TRACE_BODY   smtb; 
     
-    char time_stamp[32] = {0};
+    char time_stamp[32] = {0};   
 
     char metadata[MAX_SINGLE_METADATA_LEN] = {0};
     char meta_file[MAX_PATH_LEN]; 
+
+    char temp[3];
+    long length; /* trace item length */
+
+    //fpos_t pos;
 
     if (tp == NULL) {
         assert(1);
     }
 
-    memset(&hti,0x0,sizeof(HEAP_TRACE_INFO));
-    memset(&stsh,0x0,sizeof(STANDARD_TRACE_SUB_HEADER));
+    memset(&smth,0x0,sizeof(STANDARD_MTBF_TRACE_HEADER));
+    memset(&smtb,0x0,sizeof(STANDARD_MTBF_TRACE_BODY));
 
+    /* open blx file for reading */
     blx_file = fopen(tp->filepath, "rb");
     if (blx_file == NULL)  {
        fprintf(stderr,"Could not open %s\n",tp->filepath);
@@ -256,6 +260,7 @@ void metadata_single_blx_file(void * arg)
        return;
     }
 
+    /* open meta file for writing */
     sprintf(meta_file,"%s%s.%d%s",DEFAULT_META_FOLDER_PREFIX,basename(tp->filepath),tp->fileindex,DEFAULT_META_FILE_SUFFRIX);
     fd_meta = fopen(meta_file, "a");
     if (fd_meta == NULL)  {
@@ -265,195 +270,121 @@ void metadata_single_blx_file(void * arg)
        return;
     }
 
-    //fprintf(stdout,"Processing %s...\n",tp->filepath);
+    /* jump fixed header,maybe more bytes I can jump... */
     fseek(blx_file, 0L, SEEK_SET);
+    fseek(blx_file, BLX_STARTING_POINT, SEEK_CUR);
 
-    /*
-       Go through the file to find Message id(0x94) first. If find it then check if the next byte is Master(0x01). If yes, the 
-       read HEAP_TRACE_INFO for further check
-       TODO: how to seek to real trace content directly?
-     */
     while (!feof(blx_file))   {
 
-        if (fread(&cursor, sizeof(uint8), 1, blx_file) != 1) {
+        //fgetpos(blx_file, &pos);
+        //printf("read 0x%x\n", pos);
+
+        if (fread(&smth, sizeof(smth), 1, blx_file) != 1) {
             break;
         }
 
         switch (tp->tracetype ) 
         {  
         case TRACE_TYPE_DEFAULT:     /* default type for MTBF trace */
-            /* is it a Message id(0x94)? */
-            if (SIGNATURE_MESSAGE_ID != cursor )  {
-                continue;
+            if ((smth.media != MEDIA_TYPE_TCPIP && smth.media != MEDIA_TYPE_USB) ||
+                smth.receiver_device != RECEIVER_DEVICE_PC || 
+                smth.sender_device != SEND_DEVICE_TRACEBOX || 
+                smth.resource != RESOURCE_TRACEBOX )  {
+                
+                /* it's not a stand trace iteam at all, remember to back... */ 
+                fseek(blx_file, -sizeof(smth)+1L, SEEK_CUR);
+                continue; 
             }
+ 
+            /* yes, it is a available trace item... */
 
-            if (fread(&cursor, sizeof(uint8), 1, blx_file) != 1)  {
+            temp[0] = smth.length[0];
+            temp[1] = smth.length[1];
+            temp[2] = '\0';
+            length = strtouint32(temp);
+
+            if (fread(&smtb, sizeof(smtb), 1, blx_file) != 1)  {
                 break;
             }
 
-            /* is it a Master(0x01)? */
-            if (SIGNATURE_MASTER != cursor )  {
-                fseek(blx_file, -1L, SEEK_CUR); /* if not then back 1 byte in case the byte is Message id... */
+            if (smtb.msg_id != SIGNATURE_MESSAGE_ID ||
+                smtb.master != SIGNATURE_MASTER     ||
+                smtb.trace_type != SIGNATURE_HEAP_TYPE )  {
+              
+                /* it's an available trace item but it's not the HEAP trace we are looking for...jump to next trace item */
+                fseek(blx_file, -sizeof(smtb)+length, SEEK_CUR);
                 continue;
             }
-
-            /* now we get '0x94,0x01' in blx,which means it may a heap message */
-            if (fread(&hti, sizeof(hti), 1, blx_file) != 1)   {
-                break;
-            }
-
-            if (hti.type != SIGNATURE_HEAP_TYPE )   {
-                fseek(blx_file, -sizeof(hti)-1L, SEEK_CUR); /* if not then back sizeof(hti) bytes... */
+                     
+            if (smtb.trace_id != SIGNATURE_HEAP_DEALLOC       && smtb.trace_id != SIGNATURE_HEAP_ALLOC &&
+                smtb.trace_id != SIGNATURE_HEAP_ALLOC_NO_WAIT && smtb.trace_id != SIGNATURE_HEAP_INIT &&
+                smtb.trace_id != SIGNATURE_HEAP_COND_ALLOC    && smtb.trace_id != SIGNATURE_ALIGNED_ALLOC_NO_WAIT &&
+                smtb.trace_id != SIGNATURE_ALIGNED_ALLOC      && smtb.trace_id != SIGNATURE_HEAP_ALLOC_NO_WAIT_FROM )  {
+                
+                /* it's an available heap trace item, but it's not the ALLOC/DEALLOC/INIT HEAP trace we are looking for
+                   ...jump to next trace item */
+                fseek(blx_file, -sizeof(smtb)+length, SEEK_CUR);
                 continue;
             }
-
-            switch (hti.id)
-            {
-                case SIGNATURE_HEAP_INIT:
-                case SIGNATURE_HEAP_DEALLOC:
-                case SIGNATURE_HEAP_ALLOC:
-                case SIGNATURE_HEAP_ALLOC_NO_WAIT:
-                case SIGNATURE_HEAP_COND_ALLOC:
-                case SIGNATURE_ALIGNED_ALLOC_NO_WAIT:
-                case SIGNATURE_ALIGNED_ALLOC:
-                case SIGNATURE_HEAP_ALLOC_NO_WAIT_FROM:
-                    decode_timestamp(&hti.time[0],time_stamp);
-                    break;
-
-                default:
-                    fseek(blx_file, -sizeof(hti)-1L, SEEK_CUR); /* if not then back sizeof(hti) bytes... */
-                    continue;
-            }
-        
-            switch (hti.id)
+ 
+            decode_timestamp(&smtb.time[0],time_stamp);
+             
+            switch (smtb.trace_id)
             {
                 case SIGNATURE_HEAP_INIT:
                     sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_INIT,0,0,0,0,0);
                     fwrite(metadata,strlen(metadata),1,fd_meta);                
                     break;
 
-                case SIGNATURE_HEAP_DEALLOC:            
-                    // printf("%s HOOK_HEAP_ALLOC_DEALLOC,ptr=0x%X\n",trace_time,GET_PTR(hti.ptr));
-                    // fprintf(stdout,"%s,HEAP_DEALLOC,free size=%d(-%d)\n",trace_time,g_free_heap,freed_size);
-                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_DEALLOCATE,GET_PTR(hti.ptr),0,0,
-                            GET_PTR(hti.hdt.caller1),GET_PTR(hti.hdt.caller2));
+                case SIGNATURE_HEAP_DEALLOC:
+                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_DEALLOCATE,GET_PTR(smtb.ptr),0,0,
+                            GET_PTR(smtb.hdt.caller1),GET_PTR(smtb.hdt.caller2));
                     fwrite(metadata,strlen(metadata),1,fd_meta);
                     break;
 
                 case SIGNATURE_HEAP_ALLOC:
-                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(hti.ptr),GET_SIZE(hti.hat.size),AT_HEAP_ALLOC,
-                            GET_PTR(hti.hat.caller1), GET_PTR(hti.hat.caller2));
+                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(smtb.ptr),GET_SIZE(smtb.hat.size),AT_HEAP_ALLOC,
+                            GET_PTR(smtb.hat.caller1), GET_PTR(smtb.hat.caller2));
                     fwrite(metadata,strlen(metadata),1,fd_meta);
                     break; 
                 case SIGNATURE_HEAP_ALLOC_NO_WAIT:
-                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(hti.ptr),GET_SIZE(hti.hat.size),AT_HEAP_ALLOC_NO_WAIT,
-                            GET_PTR(hti.hat.caller1), GET_PTR(hti.hat.caller2));
+                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(smtb.ptr),GET_SIZE(smtb.hat.size),AT_HEAP_ALLOC_NO_WAIT,
+                            GET_PTR(smtb.hat.caller1), GET_PTR(smtb.hat.caller2));
                     fwrite(metadata,strlen(metadata),1,fd_meta);
                     break; 
                 case SIGNATURE_HEAP_COND_ALLOC:
-                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(hti.ptr),GET_SIZE(hti.hat.size),AT_HEAP_COND_ALLOC,
-                            GET_PTR(hti.hcat.caller1), GET_PTR(hti.hcat.caller2));
+                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(smtb.ptr),GET_SIZE(smtb.hat.size),AT_HEAP_COND_ALLOC,
+                            GET_PTR(smtb.hcat.caller1), GET_PTR(smtb.hcat.caller2));
                     fwrite(metadata,strlen(metadata),1,fd_meta);
                     break; 
                 case SIGNATURE_ALIGNED_ALLOC_NO_WAIT:
-                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(hti.ptr),GET_SIZE(hti.hat.size),AT_ALIGNED_ALLOC_NO_WAIT,
-                            GET_PTR(hti.haat.caller1), GET_PTR(hti.haat.caller2));
+                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(smtb.ptr),GET_SIZE(smtb.hat.size),AT_ALIGNED_ALLOC_NO_WAIT,
+                            GET_PTR(smtb.haat.caller1), GET_PTR(smtb.haat.caller2));
                     fwrite(metadata,strlen(metadata),1,fd_meta);
                     break; 
                 case SIGNATURE_ALIGNED_ALLOC:
-                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(hti.ptr),GET_SIZE(hti.hat.size),AT_ALIGNED_ALLOC,
-                            GET_PTR(hti.haat.caller1), GET_PTR(hti.haat.caller2));
+                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(smtb.ptr),GET_SIZE(smtb.hat.size),AT_ALIGNED_ALLOC,
+                            GET_PTR(smtb.haat.caller1), GET_PTR(smtb.haat.caller2));
                     fwrite(metadata,strlen(metadata),1,fd_meta);
                     break; 
                 case SIGNATURE_HEAP_ALLOC_NO_WAIT_FROM:
-                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(hti.ptr),GET_SIZE(hti.hat.size),AT_ALLOC_NO_WAIT_FROM,
-                            GET_PTR(hti.hanwft.caller1), GET_PTR(hti.hanwft.caller2));
+                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(smtb.ptr),GET_SIZE(smtb.hat.size),AT_ALLOC_NO_WAIT_FROM,
+                            GET_PTR(smtb.hanwft.caller1), GET_PTR(smtb.hanwft.caller2));
                     fwrite(metadata,strlen(metadata),1,fd_meta);
                     break; 
                 default:
-                    fseek(blx_file, -sizeof(hti)-1L, SEEK_CUR); /* if not then back sizeof(hti) bytes... */
-                    continue;
-            }
+                    break;
+            } /* end switch (smtb.trace_id) */
+
+            /* move cursor to a right place */
+            fseek(blx_file, -sizeof(smtb)+length, SEEK_CUR);
             break;
 
-        case TRACE_TYPE_NOS:
-            //TODO: below code is just for 11.2 products....
-            if (0x1D != cursor ) {
-                continue;
-            }
+        default:
+            fseek(blx_file, -sizeof(smth)+1L, SEEK_CUR);
+            break;
 
-            if (fread(&cursor, sizeof(uint8), 1, blx_file) != 1) {
-                break;
-            }
-
-            if (0x10 != cursor ) {
-                fseek(blx_file, -1L, SEEK_CUR);
-                continue;
-            }
-
-            if (fread(&cursor, sizeof(uint8), 1, blx_file) != 1) {
-                break;
-            }
-
-            if (0x4C != cursor ) {
-                fseek(blx_file, -2L, SEEK_CUR);
-                continue;
-            }
-
-            if (fread(&cursor, sizeof(uint8), 1, blx_file) != 1) {
-                break;
-            }
-
-            if (0x7C != cursor ) {
-                fseek(blx_file, -3L, SEEK_CUR);
-                continue;
-            }
-
-            if (fread(&stsh, sizeof(stsh), 1, blx_file) != 1) {
-                break;
-            }
-
-            if (stsh.group_id != 0x80 ) {
-                fseek(blx_file, -sizeof(stsh)-1L, SEEK_CUR); /* if not then back sizeof(stsh) bytes... */
-                continue;
-            }
-
-            switch (stsh.trace_id)
-            {
-                case SIGNATURE_HEAP_DEALLOC:
-                case SIGNATURE_HEAP_ALLOC:
-                case SIGNATURE_HEAP_ALLOC_NO_WAIT:                
-                    decode_timestamp(&stsh.time[0],time_stamp);
-                    break;
-
-                default:
-                    fseek(blx_file, -sizeof(stsh)-1L, SEEK_CUR); /* if not then back sizeof(stsh) bytes... */
-                    continue;
-            }
-        
-            switch (stsh.trace_id)
-            {
-                case SIGNATURE_HEAP_DEALLOC:            
-                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_DEALLOCATE,GET_PTR(stsh.ptr),0,0,
-                            GET_PTR(stsh.hdt.caller1),GET_PTR(stsh.hdt.caller2));
-                    fwrite(metadata,strlen(metadata),1,fd_meta);
-                    break;
-
-                case SIGNATURE_HEAP_ALLOC:
-                case SIGNATURE_HEAP_ALLOC_NO_WAIT:
-                    sprintf(metadata,META_DATA_FORMAT,time_stamp,TYPE_ALLOCATE,GET_PTR(stsh.ptr),GET_SIZE(stsh.hat.size),AT_HEAP_ALLOC,
-                            GET_PTR(stsh.hat.caller1), GET_PTR(stsh.hat.caller2));
-                    fwrite(metadata,strlen(metadata),1,fd_meta);
-                    break; 
-
-                default:
-                    fseek(blx_file, -sizeof(stsh)-1L, SEEK_CUR); /* if not then back sizeof(stsh) bytes... */
-                    continue;
-            }
-            break;         
-        } /* end switch */
-        
-
+        } /* end switch (tp->tracetype ) */
     } /* end while */
 
     fclose(blx_file);

@@ -16,10 +16,27 @@
 #include "types.h"
 
 /************************************************************************** 
+   for decode blx...use to identify MTBF blx format
+ **************************************************************************/
+/* media type */
+#define MEDIA_TYPE_TCPIP 0x1D
+#define MEDIA_TYPE_USB   0x1B
+
+/* receiver device */
+#define RECEIVER_DEVICE_PC 0x10
+
+/* send device */
+#define SEND_DEVICE_TRACEBOX 0x4C
+
+/* resource */
+#define RESOURCE_TRACEBOX 0x7C
+
+/************************************************************************** 
    Macros...
  **************************************************************************/
 /* TODO:use the real one */
-#define DEFAULT_TOTAL_FREE_HEAP (6*1024*1024)   /* default is 6M free heap */
+#define DEFAULT_TOTAL_FREE_HEAP (6.9*1024*1024)   /* default is 6M free heap */
+#define BLX_STARTING_POINT 0xbb4                  /* this offset is based on my observation */
 
 #define TEMPLATE_FILE_LIST         "./meta_tmp/tmp_blx_file_list"
 #define META_FILE_LIST             "./meta_tmp/meta_file_list"
@@ -111,6 +128,7 @@
 #define magenta  "\033[0;35m"
 #define gray  "\033[0;37m"
 #define none   "\033[0m"          /* to flush the previous property */
+
 /************************************************************************** 
    structs...
  **************************************************************************/
@@ -174,11 +192,16 @@ typedef struct HEAP_ALIGNED_ANW_TAIL {
     uint8 caller2[4];
 } HEAP_ALIGNED_ANW_TAIL;
 
-typedef struct HEAP_TRACE_INFO {
+typedef struct  STANDARD_MTBF_TRACE_BODY {
+    uint8  receiver_obj;
+    uint8  sender_obj;
+    uint8  transactoin_id;
+    uint8  msg_id;
+    uint8  master;
     uint8  channel;
     uint8  time[8];
-    uint8  type;
-    uint8  id;
+    uint8  trace_type;
+    uint8  trace_id;
     uint8  task[2];
     uint8  ptr[4];
 
@@ -190,11 +213,10 @@ typedef struct HEAP_TRACE_INFO {
       HEAP_ALIGNED_ANW_TAIL   haat;  
       HEAP_ALLOC_NWF_TAIL     hanwft;
     };
+} STANDARD_MTBF_TRACE_BODY;
 
-} HEAP_TRACE_INFO;
-
-typedef struct  STANDARD_TRACE_SUB_HEADER {
-    uint8 length[2];
+typedef struct STANDARD_XXX_TRACE_BODY {
+    
     uint8 receiver_obj;
     uint8 sender_obj;
     uint8 transactoin_id;
@@ -209,17 +231,16 @@ typedef struct  STANDARD_TRACE_SUB_HEADER {
       HEAP_ALLOC_TAIL         hat;
       HEAP_DEALLOC_TAIL       hdt;
     };
-}STANDARD_TRACE_SUB_HEADER;
+} STANDARD_XXX_TRACE_BODY;
 
-typedef struct  STANDARD_TRACE_HEADER{
+typedef struct  STANDARD_MTBF_TRACE_HEADER {
     uint8 media;
     uint8 receiver_device;
     uint8 sender_device;
     uint8 resource;
-
-    STANDARD_TRACE_SUB_HEADER stsh;
+    uint8 length[2];
     
-}STANDARD_TRACE_HEADER;
+}STANDARD_MTBF_TRACE_HEADER;
 
 typedef struct HEAP_LINK_NODE {
     uint32 addr;
