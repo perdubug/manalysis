@@ -529,10 +529,10 @@ uint8 build_metadata(char * trace_type)
 
     tp_start_threadpool(tpool);
 
+    tp_destroy_threadpool(tpool);
+    
     /* get the end time */
     gettimeofday(&endTime, NULL);
-
-    tp_destroy_threadpool(tpool);
 
     /* calculate time in microseconds */
     wall_clock_counter = (endTime.tv_sec*1000000  + (endTime.tv_usec)) - (startTime.tv_sec*1000000 + (startTime.tv_usec));
