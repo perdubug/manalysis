@@ -1,5 +1,5 @@
 /*
- * ma(memory analyzer) is a Post Analysis command-line utility programi that allows you to know memory usage(heap and block) for S40 
+ * ma(memory analyzer) is a Post Analysis command-line utility to get memory usage(heap and block) for S40
  *
  *
  * History:
